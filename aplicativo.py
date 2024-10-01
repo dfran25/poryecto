@@ -1,86 +1,43 @@
 import cv2
-import os
-import mediapipe as mp
+import torch
 
-# Inicialización de detección de rostros con MediaPipe
-mp_face_detection = mp.solutions.face_detection
-LABELS = ["despejada", "oculta"]
+# Ruta a tu modelo reentrenado
+weights_path = 'D:/Usuario/Desktop/Ingeniotec/prueba/yolov5/runs/train/exp4/weights/best.pt'
 
-# Leer el modelo previamente entrenado (LBPH)
-face_mask = cv2.face.LBPHFaceRecognizer_create()
-face_mask.read("rostro_model.xml")
+# Cargar el modelo reentrenado
+model = torch.hub.load('ultralytics/yolov5', 'custom', path=weights_path, force_reload=True)
 
-# Captura de video desde la cámara
-cap = cv2.VideoCapture(1, cv2.CAP_DSHOW)
+# Iniciar la captura de video
+cap = cv2.VideoCapture(0)  # Cambia '0' por la ruta de tu video si es necesario
 
-# Definir margen adicional para ampliar el cuadro alrededor del rostro
-MARGIN = 50  # Cambia este valor para aumentar o disminuir el tamaño del recuadro
+while True:
+    ret, frame = cap.read()
+    if not ret:
+        print("Error: No se puede capturar el video.")
+        break
 
-# Detección de rostros con MediaPipe
-with mp_face_detection.FaceDetection(min_detection_confidence=0.5) as face_detection:
-    while True:
-        ret, frame = cap.read()
-        if not ret:
-            break
-        
-        # Espejar la imagen para que se vea como un espejo
-        frame = cv2.flip(frame, 1)
-        
-        # Obtener dimensiones del cuadro
-        height, width, _ = frame.shape
-        
-        # Convertir a RGB para MediaPipe
-        frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = face_detection.process(frame_rgb)
-        
-        # Si se detectan caras
-        if results.detections:
-            for detection in results.detections:
-                # Obtener coordenadas del cuadro delimitador
-                bbox = detection.location_data.relative_bounding_box
-                xmin = int(bbox.xmin * width)
-                ymin = int(bbox.ymin * height)
-                w = int(bbox.width * width)
-                h = int(bbox.height * height)
+    # Convertir el fotograma de BGR a RGB
+    img = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
 
-                # Aumentar el tamaño del recuadro con el margen
-                xmin = max(0, xmin - MARGIN)  # Asegurar que xmin no sea negativo
-                ymin = max(0, ymin - MARGIN)  # Asegurar que ymin no sea negativo
-                xmax = min(width, xmin + w + 1.5 * MARGIN)  # Limitar a los bordes de la imagen
-                ymax = min(height, ymin + h + 1.5 * MARGIN)  # Limitar a los bordes de la imagen
+    # Realizar la detección
+    results = model(img)
 
-                # Extraer la región de la cara con el margen adicional
-                face_image = frame[ymin:ymax, xmin:xmax]
-                if face_image.size == 0:  # Si el tamaño de la imagen es cero, omitir
-                    continue
+    # Obtener las detecciones en formato DataFrame
+    detections = results.pandas().xyxy[0]
 
-                # Convertir a escala de grises
-                face_image_gray = cv2.cvtColor(face_image, cv2.COLOR_BGR2GRAY)
+    # Dibujar las detecciones en el fotograma
+    for index, row in detections.iterrows():
+        x1, y1, x2, y2, conf, cls = row[['xmin', 'ymin', 'xmax', 'ymax', 'confidence', 'class']]
+        cv2.rectangle(frame, (int(x1), int(y1)), (int(x2), int(y2)), (255, 0, 0), 2)
+        cv2.putText(frame, f'{model.names[int(cls)]} {conf:.2f}', (int(x1), int(y1)-10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (255, 0, 0), 2)
 
-                # Redimensionar la imagen al tamaño esperado por el modelo
-                face_image_resized = cv2.resize(face_image_gray, (244, 244), interpolation=cv2.INTER_CUBIC)
+    # Mostrar el fotograma con las detecciones
+    cv2.imshow('YOLOv5 Detections', frame)
 
-                # Realizar la predicción usando el modelo entrenado
-                result = face_mask.predict(face_image_resized)
-                label, confidence = result
+    # Salir si se presiona 'q'
+    if cv2.waitKey(1) & 0xFF == ord('q'):
+        break
 
-                # Mostrar el resultado si la confianza es suficientemente alta
-                if confidence < 150:  # Ajusta este umbral según los resultados de tus pruebas
-                    label_text = LABELS[label]
-                    color = (0, 255, 0) if label_text == "despejada" else (0, 0, 255)
-
-                    # Mostrar el nombre del estado (despejada/oculta)
-                    cv2.putText(frame, label_text, (xmin, ymin - 15), cv2.FONT_HERSHEY_SIMPLEX, 1, color, 2, cv2.LINE_AA)
-                    # Dibujar el recuadro alrededor del rostro con el margen ampliado
-                    cv2.rectangle(frame, (xmin, ymin), (xmax, ymax), color, 2)
-
-        # Mostrar el video con las predicciones
-        cv2.imshow("Frame", frame)
-
-        # Salir si se presiona la tecla 'Esc'
-        if cv2.waitKey(1) & 0xFF == 27:
-            break
-
-# Liberar la captura de video y cerrar ventanas
+# Liberar la captura y cerrar las ventanas
 cap.release()
 cv2.destroyAllWindows()
